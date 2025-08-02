@@ -1,0 +1,48 @@
+# cloudbuild.yaml - Place in your repo root
+steps:
+  # Build the container
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/byword-intake-api:$COMMIT_SHA', '.']
+  
+  # Push to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/byword-intake-api:$COMMIT_SHA']
+  
+  # Deploy to Cloud Run
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'byword-intake-api'
+      - '--image=gcr.io/$PROJECT_ID/byword-intake-api:$COMMIT_SHA'
+      - '--region=us-central1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--port=8080'
+      - '--timeout=300'
+  
+  # Health check and rollback if failed
+  - name: 'gcr.io/cloud-builders/curl'
+    args: ['--fail', '--retry', '5', '--retry-delay', '10', 'https://byword-intake-api-[hash]-uc.a.run.app/health']
+    
+  # Send success notification
+  - name: 'gcr.io/cloud-builders/gcloud'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "✅ Deployment successful!" | \
+        gcloud functions call send-notification --data='{"message":"Byword API deployed successfully"}'
+
+# Auto-trigger on Git push
+trigger:
+  github:
+    owner: your-username
+    name: byword-worker
+    push:
+      branch: ^main$
+
+# Failure recovery
+onFailure:
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args: ['run', 'services', 'update-traffic', 'byword-intake-api', '--to-revisions=LATEST=0,PREVIOUS=100']
